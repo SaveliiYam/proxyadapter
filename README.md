@@ -32,7 +32,7 @@ routes:
 ## Пример (gin)
 
 ```go
-up, _ := upstream.New(upstreamCfg)
+up, _ := upstream.New(httpclientCfg)
 
 parser := myJWTAccessParser{} // jwt.AccessParser
 
@@ -52,7 +52,7 @@ err := ginroutes.MountHandlersFile(r, "routes.yaml", handlers, ginroutes.MountCo
 
 | Пакет | Назначение |
 |-------|------------|
-| `upstream` | HTTP-клиент, `Forward` на upstream с Basic/Bearer |
+| `upstream` | Обёртка над `http-client`, `Forward` по path (proxy pass-through) |
 | `jwt` | Интерфейс `AccessParser` |
 | `ginroutes` | Proxy handler, JWT middleware, `MountHandlersFile` |
 

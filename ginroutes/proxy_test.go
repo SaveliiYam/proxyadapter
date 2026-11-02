@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	httpclient "github.com/SaveliiYam/http_client"
 	"github.com/SaveliiYam/proxyadapter/ginroutes"
 	"github.com/SaveliiYam/proxyadapter/upstream"
 	"github.com/gin-gonic/gin"
@@ -32,10 +33,11 @@ func TestProxyHandler(t *testing.T) {
 	}))
 	t.Cleanup(upstreamSrv.Close)
 
-	cli, err := upstream.New(upstream.Config{
+	cli, err := upstream.New(httpclient.Config{
 		Host:            upstreamSrv.URL,
+		RetryCount:      0,
 		ResponseTimeout: "2s",
-		Auth: upstream.Auth{
+		Auth: httpclient.AuthConfig{
 			Type:          "basic",
 			BasicLogin:    "svc",
 			BasicPassword: "secret",

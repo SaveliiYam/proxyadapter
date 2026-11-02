@@ -1,114 +1,82 @@
 package upstream
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"io"
+	"errors"
 	"net/http"
 	"net/url"
-	"strings"
-	"time"
+
+	httpclient "github.com/SaveliiYam/http_client"
 )
 
-// Client проксирует HTTP-запросы на upstream с исходящей auth (Basic/Bearer).
 type Client struct {
-	host    string
-	auth    Auth
-	timeout time.Duration
-	http    *http.Client
+	hc *httpclient.Client
 }
 
-func New(cfg Config) (*Client, error) {
-	def := DefaultConfig()
-	if cfg.Host == "" {
-		cfg.Host = def.Host
-	}
-	if cfg.ResponseTimeout == "" {
-		cfg.ResponseTimeout = def.ResponseTimeout
-	}
-	if cfg.Auth.Type == "" {
-		cfg.Auth = def.Auth
-	}
-	timeout, err := time.ParseDuration(cfg.ResponseTimeout)
+// New создаёт клиент из http-client Config (тот же JSON, что auth_client.json / jwt_client.json).
+func New(cfg httpclient.Config) (*Client, error) {
+	hc, err := httpclient.New(&cfg)
 	if err != nil {
-		return nil, fmt.Errorf("upstream: response_timeout: %w", err)
+		return nil, err
 	}
-	return &Client{
-		host:    strings.TrimRight(cfg.Host, "/"),
-		auth:    cfg.Auth,
-		timeout: timeout,
-		http:    &http.Client{Timeout: timeout},
-	}, nil
+	return &Client{hc: hc}, nil
 }
 
-// Forward — тот же method/path/query/body, без клиентского Authorization.
+// Forward — method/path/query/body; клиентский Authorization не пробрасывается (задаётся Auth в Config).
 func (c *Client) Forward(ctx context.Context, method, path string, query url.Values, body []byte, clientHeaders http.Header) (status int, respBody []byte, err error) {
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	u := c.host + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	raw, status, err := c.hc.DoPath(ctx, method, path, body, valuesToMap(query), filterHeaders(clientHeaders))
 	if err != nil {
+		var he *httpclient.HTTPError
+		if errors.As(err, &he) {
+			return he.Status, append([]byte(nil), he.Body...), nil
+		}
 		return 0, nil, err
 	}
-	if len(body) > 0 {
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
-	}
-	c.applyOutgoingAuth(req)
-	copyForwardHeaders(req.Header, clientHeaders)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, nil, err
-	}
-	return resp.StatusCode, raw, nil
+	return status, raw, nil
 }
 
-func (c *Client) applyOutgoingAuth(req *http.Request) {
-	switch strings.ToLower(c.auth.Type) {
-	case "basic":
-		req.SetBasicAuth(c.auth.BasicLogin, c.auth.BasicPassword)
-	case "bearer":
-		req.Header.Set("Authorization", "Bearer "+c.auth.BearerToken)
+func valuesToMap(q url.Values) map[string]string {
+	if len(q) == 0 {
+		return nil
 	}
+	out := make(map[string]string, len(q))
+	for k, vals := range q {
+		if len(vals) > 0 {
+			out[k] = vals[0]
+		}
+	}
+	return out
 }
 
 var hopByHop = map[string]struct{}{
-	"Connection":        {},
-	"Keep-Alive":        {},
-	"Proxy-Authenticate": {},
+	"Connection":          {},
+	"Keep-Alive":          {},
+	"Proxy-Authenticate":  {},
 	"Proxy-Authorization": {},
-	"Te":                {},
-	"Trailers":          {},
-	"Transfer-Encoding": {},
-	"Upgrade":           {},
-	"Authorization":     {},
-	"Proxy-Connection":  {},
-	"Content-Length":    {},
+	"Te":                  {},
+	"Trailers":            {},
+	"Transfer-Encoding":   {},
+	"Upgrade":             {},
+	"Authorization":       {},
+	"Proxy-Connection":    {},
+	"Content-Length":      {},
 }
 
-func copyForwardHeaders(dst, src http.Header) {
+func filterHeaders(src http.Header) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{"Content-Type": "application/json"}
+	}
+	out := make(map[string]string)
 	for k, vals := range src {
 		if _, skip := hopByHop[http.CanonicalHeaderKey(k)]; skip {
 			continue
 		}
-		for _, v := range vals {
-			dst.Add(k, v)
+		if len(vals) > 0 {
+			out[k] = vals[0]
 		}
 	}
-	if dst.Get("Content-Type") == "" {
-		dst.Set("Content-Type", "application/json")
+	if out["Content-Type"] == "" {
+		out["Content-Type"] = "application/json"
 	}
+	return out
 }
